@@ -17,14 +17,13 @@ describe("mos3 package", () => {
       id: string;
       displayName: string;
       description: string;
-      toolSource: { remoteMcpServer: { mcpServerUrl: string; authorization: { type: string } } };
+      toolSource: { remoteMcpServer: { mcpServerUrl: string } };
     };
 
     assert.equal(connector.id, CONNECTOR_ID);
     assert.ok(connector.displayName.length > 0);
     assert.ok(connector.description.length > 0);
     assert.equal(connector.toolSource.remoteMcpServer.mcpServerUrl, URL_UNDER_TEST);
-    assert.equal(connector.toolSource.remoteMcpServer.authorization.type, "None");
   });
 
   it("selects dynamic tool discovery by leaving the tool description out", () => {
@@ -34,7 +33,7 @@ describe("mos3 package", () => {
       }
     ).toolSource.remoteMcpServer;
 
-    assert.deepEqual(Object.keys(remote), ["mcpServerUrl", "authorization"]);
+    assert.deepEqual(Object.keys(remote), ["mcpServerUrl"]);
   });
 
   it("declares a manifest version that supports dynamic discovery", () => {
