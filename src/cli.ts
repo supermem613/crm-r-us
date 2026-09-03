@@ -7,6 +7,8 @@ import { dirname, join } from "node:path";
 import { doctorCommand } from "./commands/doctor.js";
 import { mcpCallCommand, mcpSchemaCommand } from "./commands/mcpDebug.js";
 import { mcpConfigCommand } from "./commands/mcpConfig.js";
+import { DEFAULT_PACKAGE_PATH, mos3PackageCommand } from "./commands/mos3Package.js";
+import { APP_VERSION } from "./mos3/package.js";
 import { schemaCommand } from "./commands/schema.js";
 import { DEFAULT_HOST, DEFAULT_PORT, serveCommand } from "./service.js";
 import { startMcpServer } from "./server.js";
@@ -63,6 +65,14 @@ program
   .command("mcp-call <tool> [jsonArgs]")
   .description("Debug this MCP by calling a tool through a local MCP client")
   .action(mcpCallCommand);
+
+program
+  .command("mos3-package")
+  .description("Build a MOS3 app package that registers this MCP as a Microsoft 365 agent connector")
+  .requiredOption("--url <url>", "Public MCP endpoint Copilot calls, for example https://<your-tunnel>/mcp")
+  .option("--out <path>", "Output zip path", DEFAULT_PACKAGE_PATH)
+  .option("--version <semver>", "App package version", APP_VERSION)
+  .action(mos3PackageCommand);
 
 program
   .command("update")

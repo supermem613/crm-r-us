@@ -7,6 +7,7 @@ export interface FlagSpec {
   type: FlagType;
   summary: string;
   default?: boolean | string | number;
+  required?: boolean;
 }
 
 export interface CommandSpec {
@@ -100,6 +101,29 @@ export const commandSpecs: CommandSpec[] = [
     },
     output: { documented: true, schema: "CallToolResult" },
     examples: ["mcp-call ping", "mcp-call demo_seed", "mcp-call account_search {\"query\":\"Contoso\"}"],
+  },
+  {
+    path: ["mos3-package"],
+    summary: "Build a MOS3 app package that registers crm-r-us as an MCP agent connector.",
+    effect: "write",
+    input: {
+      positionals: [],
+      flags: [
+        {
+          name: "--url",
+          type: "string",
+          summary: "Public MCP endpoint Copilot calls, for example https://<your-tunnel>/mcp.",
+          required: true,
+        },
+        { name: "--out", type: "string", summary: "Output zip path.", default: "crm-r-us-mos3.zip" },
+        { name: "--version", type: "string", summary: "App package version.", default: "1.0.0" },
+      ],
+    },
+    output: { documented: true, schema: "Mos3PackageResult" },
+    examples: [
+      "mos3-package --url https://example.devtunnels.ms/mcp",
+      "mos3-package --url https://example.devtunnels.ms/mcp --out dist/crm.zip",
+    ],
   },
   {
     path: ["update"],

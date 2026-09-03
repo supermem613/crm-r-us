@@ -13,6 +13,7 @@ describe("schema", () => {
       ["serve"],
       ["mcp-schema"],
       ["mcp-call"],
+      ["mos3-package"],
       ["update"],
     ]);
   });

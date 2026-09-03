@@ -86,8 +86,47 @@ crm-r-us mcp-server                 # stdio, default database at ~/.crm-r-us/crm
 crm-r-us mcp-server --db ./demo.db  # any other SQLite file
 crm-r-us mcp-schema
 crm-r-us mcp-call demo_seed
+crm-r-us mos3-package --url https://<your-tunnel>.devtunnels.ms/mcp
 crm-r-us update --json
 ```
+
+## Use it from Microsoft 365 Copilot
+
+`mos3-package` builds a MOS3 app package that registers this CRM as an MCP agent
+connector. Any Microsoft 365 agent that speaks MCP, including Cowork, then
+discovers the CRM tools and calls the running `serve` endpoint directly.
+
+```bash
+crm-r-us mos3-package --url https://<your-tunnel>.devtunnels.ms/mcp
+```
+
+`--url` is required. The endpoint is baked into the package, and tunnel URLs
+expire, so the command never guesses one. Pass the current URL every time you
+rebuild.
+
+The connector uses dynamic tool discovery, so the host reads the tool list from
+the running server at call time. Adding or renaming a tool needs no republish.
+
+The package contains:
+
+| File | Purpose |
+| --- | --- |
+| `manifest.json` | App manifest with the `agentConnectors` entry and the MCP endpoint. |
+| `color.png`, `outline.png` | Placeholder icons. Replace them before you publish. |
+
+Copilot runs in the cloud and calls the endpoint with no credentials, so three
+things must be true before the connector works:
+
+1. `crm-r-us serve` is running.
+2. A public HTTPS URL forwards to port 3737. A dev tunnel does this:
+   `devtunnel port create -p 3737` then `devtunnel host`.
+3. That URL allows anonymous access: `devtunnel access create -p 3737 -a`.
+   Use the plain forwarding host. The `-inspect` host is the tunnel web portal
+   and always demands a sign-in, so it never works as an MCP endpoint.
+
+Anonymous access plus a server with no authentication means anyone who learns
+the URL gets full control of the CRM. Host the tunnel only while you demo, and
+delete it afterward.
 
 ## Data
 
@@ -179,6 +218,9 @@ src/
   mcp/
     format.ts   # compact JSON text results
     tools.ts    # MCP tool surface
+  mos3/
+    package.ts  # MOS3 app package manifests
+    zip.ts      # zip writer
   commands/
     mcpConfig.ts
     mcpDebug.ts
