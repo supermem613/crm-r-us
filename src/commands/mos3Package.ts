@@ -34,6 +34,14 @@ export function requireMcpUrl(value: string | undefined): string {
     throw new Error(`Invalid --url "${value}". Use an https URL. Microsoft 365 rejects a cleartext MCP endpoint.`);
   }
 
+  // Copilot calls this URL as the MCP endpoint. Our server only speaks MCP
+  // at /mcp, so a bare host bakes a connector that can never initialize.
+  if (parsed.pathname !== "/mcp") {
+    throw new Error(
+      `Invalid --url "${value}". The path must be /mcp. This service speaks MCP only at that path, for example https://<your-tunnel>/mcp.`,
+    );
+  }
+
   return parsed.toString();
 }
 

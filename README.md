@@ -35,24 +35,41 @@ crm-r-us serve --quiet
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /mcp` | MCP streamable HTTP endpoint. |
+| `DELETE /mcp` | Ends one MCP session. |
 | `GET /health` | Liveness, active session count, and live CRM stats. |
 
-While it runs, `serve` prints every request to stderr so you can narrate a demo
+`GET /mcp` answers `405`. The MCP spec makes the server-to-client event stream
+optional, and `405` is how a server declines it, so clients read that status and
+carry on over `POST`. The CRM never pushes an unsolicited message, and a
+long-lived stream stalls behind a tunnel that buffers the response body, so this
+service does not offer one.
+
+While it runs, `serve` prints every connection to stderr so you can narrate a demo
 from the console:
 
 ```text
 time      client          session   event
 00:39:26  192.168.1.25    1234ae1e  session opened
+00:39:26  192.168.1.25    1234ae1e  call initialize 5ms
 00:39:26  192.168.1.25    1234ae1e  call tools/list 4ms
 00:39:26  192.168.1.25    1234ae1e  call demo_seed 41ms
 00:39:26  192.168.1.25    1234ae1e  call deal_advance_stage 1ms
 00:39:27  127.0.0.1       -         call GET /health 0ms
+00:39:28  192.168.1.25    -         reject GET /mpc is not a route this service serves
+00:39:31  192.168.1.25    -         error connected and closed without completing a request, 0 bytes received
 ```
 
 Each line carries the client IP, the first 8 characters of the MCP session id,
-the CRM verb, and how long it took. Session opens, client disconnects, rejected
-requests, and reaped sessions appear on the same stream. Pass `--quiet` to turn
-the per-request lines off and keep only the startup banner.
+the CRM verb, and how long it took. Every connection produces a line, not only
+every request: a peer that opens a socket and sends nothing, or sends something
+this service cannot parse as HTTP, is reported too. Node never routes such a
+peer, so without those lines a failing client would look exactly like a client
+that never reached the machine. Session
+opens and closes, reaped sessions, rejected requests, and failed requests all
+appear on the same stream, and each rejection names the reason rather than a
+status code. A dash in the session column means the request carried no session
+header. Pass `--quiet` to turn the per-request lines off and keep only the
+startup banner.
 
 `0.0.0.0` publishes the CRM to every machine that can reach this host, with no
 authentication. Windows Firewall may still block inbound access from another

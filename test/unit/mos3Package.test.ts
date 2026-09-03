@@ -17,13 +17,14 @@ describe("mos3 package", () => {
       id: string;
       displayName: string;
       description: string;
-      toolSource: { remoteMcpServer: { mcpServerUrl: string } };
+      toolSource: { remoteMcpServer: { mcpServerUrl: string; authorization: { type: string } } };
     };
 
     assert.equal(connector.id, CONNECTOR_ID);
     assert.ok(connector.displayName.length > 0);
     assert.ok(connector.description.length > 0);
     assert.equal(connector.toolSource.remoteMcpServer.mcpServerUrl, URL_UNDER_TEST);
+    assert.deepEqual(connector.toolSource.remoteMcpServer.authorization, { type: "None" });
   });
 
   it("selects dynamic tool discovery by leaving the tool description out", () => {
@@ -33,7 +34,7 @@ describe("mos3 package", () => {
       }
     ).toolSource.remoteMcpServer;
 
-    assert.deepEqual(Object.keys(remote), ["mcpServerUrl"]);
+    assert.deepEqual(Object.keys(remote), ["mcpServerUrl", "authorization"]);
   });
 
   it("declares a manifest version that supports dynamic discovery", () => {
@@ -84,5 +85,7 @@ describe("mos3 package", () => {
     assert.throws(() => requireMcpUrl(undefined), /Missing --url/);
     assert.throws(() => requireMcpUrl("example.test/mcp"), /Invalid --url/);
     assert.throws(() => requireMcpUrl("http://example.test/mcp"), /https URL/);
+    assert.throws(() => requireMcpUrl("https://example.test"), /path must be \/mcp/);
+    assert.throws(() => requireMcpUrl("https://example.test/health"), /path must be \/mcp/);
   });
 });

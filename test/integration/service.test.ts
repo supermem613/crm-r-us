@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
+import { once } from "node:events";
+import { createConnection } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { MEMORY_DB, openDb } from "../../src/crm/db.js";
@@ -140,6 +142,104 @@ describe("crm http service", () => {
       await client.close();
     } finally {
       await service.close();
+    }
+  });
+
+  it("declines the GET event stream with the status a client accepts", async () => {
+    await withService(async (_service, base) => {
+      // The reference client treats 405 as "this server offers no stream" and
+      // carries on over POST. Every other failure status is a transport error
+      // that fails the whole connection, so the status itself is the contract.
+      for (const headers of [{}, { "mcp-session-id": "not-a-real-session" }] as Record<string, string>[]) {
+        const response = await fetch(`${base}/mcp`, { method: "GET", headers });
+
+        assert.equal(response.status, 405);
+        assert.equal(response.headers.get("allow"), "POST, DELETE");
+      }
+    });
+  });
+
+  it("keeps a client working after the event stream is declined", async () => {
+    await withService(async (_service, base) => {
+      const { client, call } = await connect(base);
+
+      assert.ok((await client.listTools()).tools.length > 0);
+      assert.deepEqual(await call("ping"), { ok: true, data: { message: "pong" } });
+
+      await client.close();
+    });
+  });
+
+  it("writes an activity line for every request it turns away", async () => {
+    const lines: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      await withService(async (_service, base) => {
+        await fetch(`${base}/mcp`, { method: "GET" });
+        await fetch(`${base}/mcp`, { method: "PUT" });
+        await fetch(`${base}/nope`);
+        await fetch(`${base}/mcp`, { method: "DELETE" });
+        await fetch(`${base}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{ this is not json",
+        });
+      });
+    } finally {
+      process.stderr.write = original;
+    }
+
+    const log = lines.join("");
+    assert.match(log, /GET event stream is not offered here/);
+    assert.match(log, /PUT \/mcp is not a supported method/);
+    assert.match(log, /GET \/nope is not a route this service serves/);
+    assert.match(log, /DELETE without a session header/);
+    assert.match(log, /error/);
+    assert.match(log, /POST \/mcp failed:/);
+  });
+
+  it("reports a peer that connects but never completes a request", async () => {
+    // Node only invokes the request handler for a well-formed request, so these
+    // two peers would otherwise leave no trace at all and a connection failure
+    // would look exactly like a client that never dialed us.
+    const lines: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+
+    const waitForLog = async (pattern: RegExp): Promise<void> => {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        if (pattern.test(lines.join(""))) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`no activity line matched ${String(pattern)}. Saw: ${lines.join("")}`);
+    };
+
+    try {
+      await withService(async (service) => {
+        const silent = createConnection({ port: service.port, host: "127.0.0.1" });
+        await once(silent, "connect");
+        silent.end();
+        await waitForLog(/connected and closed without completing a request/);
+
+        const malformed = createConnection({ port: service.port, host: "127.0.0.1" });
+        await once(malformed, "connect");
+        malformed.write("NOT-HTTP / GARBAGE\r\n\r\n");
+        await waitForLog(/malformed request rejected before routing/);
+        malformed.destroy();
+      });
+    } finally {
+      process.stderr.write = original;
     }
   });
 

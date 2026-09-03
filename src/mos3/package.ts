@@ -54,12 +54,7 @@ export function buildAgentConnector(url: string): Record<string, unknown> {
     toolSource: {
       remoteMcpServer: {
         mcpServerUrl: url,
-        // `authorization` is deliberately absent. The MOS3 manifest schema only
-        // accepts the capitalized "None", but the Knowledge Agent host compares
-        // the value against the lowercase 'none' and treats every other spelling
-        // as an authenticated server, which fails the connector with
-        // MCP_AUTH_UNSUPPORTED. Omitting the key satisfies both: MOS3 treats it
-        // as optional and the host takes its "no authorization" branch.
+        authorization: { type: "None" },
       },
     },
   };

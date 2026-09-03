@@ -2,6 +2,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import chalk from "chalk";
 import { defaultDbPath, openDb, type Db } from "./crm/db.js";
 import { crmStats } from "./crm/store.js";
@@ -103,16 +104,20 @@ class ActivityLog {
   reject(ip: string, sessionId: string | undefined, reason: string): void {
     this.write(chalk.yellow, ip, sessionId, "reject", reason);
   }
+
+  error(ip: string, sessionId: string | undefined, detail: string): void {
+    this.write(chalk.red, ip, sessionId, "error", detail);
+  }
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
+function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const text = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
+  res.writeHead(status, { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(text) });
   res.end(text);
 }
 
-function jsonRpcError(res: ServerResponse, status: number, message: string): void {
-  sendJson(res, status, { jsonrpc: "2.0", error: { code: -32000, message }, id: null });
+function jsonRpcError(res: ServerResponse, status: number, message: string, headers: Record<string, string> = {}): void {
+  sendJson(res, status, { jsonrpc: "2.0", error: { code: -32000, message }, id: null }, headers);
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -183,13 +188,13 @@ export async function startCrmService(options: ServeOptions): Promise<RunningSer
     }
 
     if (sessionId !== undefined) {
-      activity.reject(ip, sessionId, "unknown session");
+      activity.reject(ip, sessionId, "POST for a session this service does not hold");
       jsonRpcError(res, 404, `Unknown MCP session "${sessionId}". Initialize a new session.`);
       return;
     }
 
     if (!isInitializeRequest(body)) {
-      activity.reject(ip, undefined, `no session header for ${describeCall(body)}`);
+      activity.reject(ip, undefined, `POST ${describeCall(body)} without a session header`);
       jsonRpcError(res, 400, `Missing ${SESSION_HEADER} header. Send an initialize request first.`);
       return;
     }
@@ -206,43 +211,80 @@ export async function startCrmService(options: ServeOptions): Promise<RunningSer
       },
     });
     transport.onclose = () => {
-      if (transport.sessionId !== undefined) {
-        sessions.delete(transport.sessionId);
+      const id = transport.sessionId;
+      // onsessionclosed already reports a client-driven close, and it deletes the
+      // entry, so this only reports the closes nothing else accounts for.
+      if (id !== undefined && sessions.delete(id)) {
+        activity.session(ip, id, "closed by transport");
       }
     };
 
     await createCrmRUsServer({ db }).connect(transport);
+    const startedAt = Date.now();
     await transport.handleRequest(req, res, body);
+    activity.call(ip, transport.sessionId, describeCall(body), Date.now() - startedAt);
   }
 
-  async function handleSessionRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /**
+   * Declines the optional GET event stream.
+   *
+   * The MCP spec lets a server answer 405 to say it offers no stream at this
+   * endpoint, and clients treat that as a normal answer and keep working over
+   * POST. Any other failure status is a transport error to them, so answering
+   * 404 for a missing or unknown session header killed the whole connection.
+   * A long-lived stream is also unusable through a tunnel that buffers the
+   * response body, because the client never receives the response headers.
+   */
+  function handleGet(req: IncomingMessage, res: ServerResponse): void {
+    activity.reject(clientIp(req), sessionIdOf(req), "GET event stream is not offered here, answered 405");
+    jsonRpcError(res, 405, `This service does not offer a GET event stream. Send requests as POST ${endpoint}.`, {
+      allow: "POST, DELETE",
+    });
+  }
+
+  async function handleDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const sessionId = sessionIdOf(req);
-    const session = sessionId === undefined ? undefined : sessions.get(sessionId);
     const ip = clientIp(req);
-    if (session === undefined || sessionId === undefined) {
-      activity.reject(ip, sessionId, `${req.method ?? "request"} with unknown session`);
-      jsonRpcError(res, 404, `Unknown or missing ${SESSION_HEADER}.`);
+    if (sessionId === undefined) {
+      activity.reject(ip, undefined, "DELETE without a session header");
+      jsonRpcError(res, 400, `Missing ${SESSION_HEADER} header.`);
+      return;
+    }
+    const session = sessions.get(sessionId);
+    if (session === undefined) {
+      activity.reject(ip, sessionId, "DELETE for a session this service does not hold");
+      jsonRpcError(res, 404, `Unknown MCP session "${sessionId}".`);
       return;
     }
     touch(sessionId);
-    if (req.method === "DELETE") {
-      activity.session(ip, sessionId, "delete requested");
-    }
+    activity.session(ip, sessionId, "delete requested");
     await session.transport.handleRequest(req, res);
   }
 
+  // Node only invokes the request handler for a complete, well-formed request.
+  // A peer that opens a socket and sends nothing, sends malformed HTTP, or
+  // speaks TLS to this plain-HTTP port never reaches it. Without these socket
+  // listeners such a peer is indistinguishable from one that never connected,
+  // which makes the activity log lie by omission during a connection failure.
+  const sawRequest = new WeakSet<Socket>();
+
   const http = createServer((req, res) => {
+    sawRequest.add(req.socket);
     void (async () => {
+      const ip = clientIp(req);
+      let pathname = req.url ?? "/";
       try {
         const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+        pathname = url.pathname;
 
         if (url.pathname === "/health") {
-          activity.call(clientIp(req), undefined, "GET /health", 0);
+          activity.call(ip, undefined, "GET /health", 0);
           sendJson(res, 200, { ok: true, service: "crm-r-us", sessions: sessions.size, stats: crmStats(db) });
           return;
         }
 
         if (url.pathname !== endpoint) {
+          activity.reject(ip, sessionIdOf(req), `${req.method ?? "request"} ${url.pathname} is not a route this service serves`);
           jsonRpcError(res, 404, `No such endpoint. Use POST ${endpoint} or GET /health.`);
           return;
         }
@@ -251,14 +293,23 @@ export async function startCrmService(options: ServeOptions): Promise<RunningSer
           await handlePost(req, res);
           return;
         }
-        if (req.method === "GET" || req.method === "DELETE") {
-          await handleSessionRequest(req, res);
+        if (req.method === "GET") {
+          handleGet(req, res);
           return;
         }
-        jsonRpcError(res, 405, `Method ${req.method ?? "unknown"} is not supported on ${endpoint}.`);
+        if (req.method === "DELETE") {
+          await handleDelete(req, res);
+          return;
+        }
+        activity.reject(ip, sessionIdOf(req), `${req.method ?? "unknown"} ${endpoint} is not a supported method`);
+        jsonRpcError(res, 405, `Method ${req.method ?? "unknown"} is not supported on ${endpoint}.`, {
+          allow: "POST, DELETE",
+        });
       } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        activity.error(ip, sessionIdOf(req), `${req.method ?? "request"} ${pathname} failed: ${detail}`);
         if (!res.headersSent) {
-          jsonRpcError(res, 500, err instanceof Error ? err.message : String(err));
+          jsonRpcError(res, 500, detail);
         } else {
           res.end();
         }
@@ -266,10 +317,35 @@ export async function startCrmService(options: ServeOptions): Promise<RunningSer
     })();
   });
 
+  http.on("connection", (socket: Socket) => {
+    socket.once("close", () => {
+      if (!sawRequest.has(socket)) {
+        const raw = socket.remoteAddress ?? "unknown";
+        const ip = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+        activity.error(ip, undefined, `connected and closed without completing a request, ${socket.bytesRead} bytes received`);
+      }
+    });
+  });
+
+  http.on("clientError", (err: NodeJS.ErrnoException, socket: Socket) => {
+    const raw = socket.remoteAddress ?? "unknown";
+    const ip = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+    activity.error(ip, undefined, `malformed request rejected before routing: ${err.code ?? err.message}`);
+    if (socket.writable) {
+      socket.end("HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\n\r\n");
+    }
+    socket.destroy();
+  });
+
   await new Promise<void>((resolve, reject) => {
     http.once("error", reject);
     http.listen(options.port, options.host, () => {
       http.removeListener("error", reject);
+      // Registered only after a successful bind so a bind failure surfaces as
+      // the thrown startup error rather than an activity line.
+      http.on("error", (err: Error) => {
+        activity.error("server", undefined, `http server error: ${err.message}`);
+      });
       resolve();
     });
   });
