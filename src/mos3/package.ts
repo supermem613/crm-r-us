@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ZipEntry } from "./zip.js";
 
-export const APP_NAME = "CRM R Us";
+export const APP_NAME = "CRM-R-Us";
 export const APP_VERSION = "1.0.0";
 
 /**
@@ -50,7 +50,7 @@ export function buildAgentConnector(url: string): Record<string, unknown> {
     id: CONNECTOR_ID,
     displayName: APP_NAME,
     description:
-      "Read and update accounts, contacts, deals, activities, and tasks in the CRM R Us demo CRM, and report on the sales pipeline.",
+      "Read and update accounts, contacts, deals, activities, and tasks in the CRM-R-Us demo CRM, and report on the sales pipeline.",
     toolSource: {
       remoteMcpServer: {
         mcpServerUrl: url,
@@ -75,7 +75,7 @@ export function buildAppManifest(url: string, version: string): Record<string, u
     name: { short: APP_NAME, full: APP_NAME },
     description: {
       short: "Demo CRM for accounts, contacts, deals, and tasks.",
-      full: "CRM R Us is a demo customer relationship manager. It tracks accounts, contacts, deals, activities, and follow-up tasks, and reports on the sales pipeline.",
+      full: "CRM-R-Us is a demo customer relationship manager. It tracks accounts, contacts, deals, activities, and follow-up tasks, and reports on the sales pipeline.",
     },
     icons: { color: "color.png", outline: "outline.png" },
     accentColor: "#6264A7",

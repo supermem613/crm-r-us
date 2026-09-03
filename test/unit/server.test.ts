@@ -92,6 +92,38 @@ describe("mcp server", () => {
     await client.close();
   });
 
+  it("advertises safety annotations for every tool", async () => {
+    const { client } = await connectClient();
+
+    const byName = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool.annotations]));
+
+    assert.deepEqual(byName.get("report_pipeline"), {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+    assert.deepEqual(byName.get("account_delete"), {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+    assert.deepEqual(byName.get("account_create"), {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+
+    for (const [name, annotations] of byName) {
+      assert.equal(typeof annotations?.readOnlyHint, "boolean", `${name} needs a readOnlyHint`);
+      assert.equal(annotations?.openWorldHint, false, `${name} touches only the local database`);
+    }
+
+    await client.close();
+  });
+
   it("returns an actionable error envelope for a missing record", async () => {
     const { client, call } = await connectClient();
 

@@ -1,4 +1,5 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { toolTextResult } from "./format.js";
 import { resetDb, type Db } from "../crm/db.js";
@@ -92,8 +93,57 @@ function optionalShape<T extends z.ZodRawShape>(shape: T) {
   return out;
 }
 
+/**
+ * Tools that only read. A host that sees no annotation must assume a tool can
+ * destroy data, so it prompts for approval on every call. Naming the read tools
+ * here lets a host run them without interrupting the person.
+ */
+const READ_ONLY_TOOLS = new Set([
+  "ping",
+  "account_get",
+  "account_search",
+  "contact_get",
+  "contact_search",
+  "deal_get",
+  "deal_search",
+  "activity_list",
+  "task_list",
+  "report_pipeline",
+  "report_stats",
+]);
+
+/** Tools that remove data that no other tool can recreate. */
+const DESTRUCTIVE_TOOLS = new Set([
+  "account_delete",
+  "contact_delete",
+  "deal_delete",
+  "task_delete",
+  "demo_reset",
+]);
+
+/**
+ * One table drives every tool, so a new tool cannot silently ship with the wrong
+ * safety hint. Every tool reads and writes the local database only, so nothing
+ * here reaches an outside system.
+ */
+function annotationsFor(name: string): ToolAnnotations {
+  if (READ_ONLY_TOOLS.has(name)) {
+    return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+  }
+  if (DESTRUCTIVE_TOOLS.has(name)) {
+    return { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+  }
+  return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+}
+
 export function registerCrmTools(server: McpServer, db: Db): void {
-  server.registerTool(
+  const registerTool = <InputArgs extends z.ZodRawShape>(
+    name: string,
+    config: { title?: string; description?: string; inputSchema?: InputArgs },
+    handler: ToolCallback<InputArgs>,
+  ) => server.registerTool(name, { ...config, annotations: annotationsFor(name) }, handler);
+
+  registerTool(
     "ping",
     { title: "Ping", description: "Return a pong response for MCP health checks.", inputSchema: {} },
     async () => toolTextResult({ ok: true, data: { message: "pong" } }),
@@ -101,13 +151,13 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* ---------------------------------------------------------------- accounts */
 
-  server.registerTool(
+  registerTool(
     "account_create",
     { title: "Create account", description: "Create a CRM account (company).", inputSchema: accountFields },
     async (args) => run(() => createAccount(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "account_update",
     {
       title: "Update account",
@@ -117,7 +167,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id, ...patch }) => run(() => updateAccount(db, id, patch)),
   );
 
-  server.registerTool(
+  registerTool(
     "account_get",
     {
       title: "Get account",
@@ -127,7 +177,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id }) => run(() => getAccount(db, id)),
   );
 
-  server.registerTool(
+  registerTool(
     "account_search",
     {
       title: "Search accounts",
@@ -142,7 +192,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => searchAccounts(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "account_delete",
     {
       title: "Delete account",
@@ -154,13 +204,13 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* ---------------------------------------------------------------- contacts */
 
-  server.registerTool(
+  registerTool(
     "contact_create",
     { title: "Create contact", description: "Create a contact, optionally linked to an account.", inputSchema: contactFields },
     async (args) => run(() => createContact(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "contact_update",
     {
       title: "Update contact",
@@ -170,7 +220,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id, ...patch }) => run(() => updateContact(db, id, patch)),
   );
 
-  server.registerTool(
+  registerTool(
     "contact_get",
     {
       title: "Get contact",
@@ -180,7 +230,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id }) => run(() => getContact(db, id)),
   );
 
-  server.registerTool(
+  registerTool(
     "contact_search",
     {
       title: "Search contacts",
@@ -194,7 +244,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => searchContacts(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "contact_delete",
     {
       title: "Delete contact",
@@ -206,13 +256,13 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* ------------------------------------------------------------------- deals */
 
-  server.registerTool(
+  registerTool(
     "deal_create",
     { title: "Create deal", description: "Create a pipeline deal (opportunity).", inputSchema: dealFields },
     async (args) => run(() => createDeal(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "deal_update",
     {
       title: "Update deal",
@@ -222,7 +272,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id, ...patch }) => run(() => updateDeal(db, id, patch)),
   );
 
-  server.registerTool(
+  registerTool(
     "deal_get",
     {
       title: "Get deal",
@@ -232,7 +282,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id }) => run(() => getDeal(db, id)),
   );
 
-  server.registerTool(
+  registerTool(
     "deal_search",
     {
       title: "Search deals",
@@ -250,7 +300,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => searchDeals(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "deal_advance_stage",
     {
       title: "Advance deal stage",
@@ -266,7 +316,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id, toStage }) => run(() => advanceDealStage(db, id, toStage)),
   );
 
-  server.registerTool(
+  registerTool(
     "deal_close",
     {
       title: "Close deal",
@@ -280,7 +330,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id, outcome, reason }) => run(() => closeDeal(db, id, outcome, reason)),
   );
 
-  server.registerTool(
+  registerTool(
     "deal_delete",
     {
       title: "Delete deal",
@@ -292,7 +342,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* -------------------------------------------------------------- activities */
 
-  server.registerTool(
+  registerTool(
     "activity_log",
     {
       title: "Log activity",
@@ -311,7 +361,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => logActivity(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "activity_list",
     {
       title: "List activities",
@@ -331,7 +381,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* ------------------------------------------------------------------- tasks */
 
-  server.registerTool(
+  registerTool(
     "task_create",
     {
       title: "Create task",
@@ -350,7 +400,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => createTask(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "task_complete",
     {
       title: "Complete task",
@@ -363,7 +413,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ id, outcomeNote }) => run(() => completeTask(db, id, outcomeNote)),
   );
 
-  server.registerTool(
+  registerTool(
     "task_list",
     {
       title: "List tasks",
@@ -380,7 +430,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => listTasks(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "task_delete",
     { title: "Delete task", description: "Delete a task.", inputSchema: { id: idField("Task id.") } },
     async ({ id }) => run(() => deleteTask(db, id)),
@@ -388,7 +438,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* ----------------------------------------------------------------- reports */
 
-  server.registerTool(
+  registerTool(
     "report_pipeline",
     {
       title: "Pipeline report",
@@ -401,7 +451,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async (args) => run(() => pipelineReport(db, args)),
   );
 
-  server.registerTool(
+  registerTool(
     "report_stats",
     {
       title: "CRM stats",
@@ -415,7 +465,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
 
   /* -------------------------------------------------------------------- demo */
 
-  server.registerTool(
+  registerTool(
     "demo_seed",
     {
       title: "Seed demo data",
@@ -427,7 +477,7 @@ export function registerCrmTools(server: McpServer, db: Db): void {
     async ({ reset }) => run(() => seedDemoData(db, reset ?? true)),
   );
 
-  server.registerTool(
+  registerTool(
     "demo_reset",
     {
       title: "Reset database",
